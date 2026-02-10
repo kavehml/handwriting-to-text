@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Handwriting to Text</title>
+  <script src="https://unpkg.com/tesseract.js@5/dist/tesseract.min.js"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 700px; margin: 2rem auto; padding: 1rem; }
+    .box { border: 1px solid #ccc; border-radius: 8px; padding: 1rem; margin-top: 1rem; }
+    #preview { max-width: 100%; max-height: 300px; display: none; margin-top: 0.5rem; }
+    #progress { margin-top: 0.5rem; font-size: 0.9rem; color: #555; }
+    textarea { width: 100%; min-height: 150px; }
+    button { padding: 0.5rem 1rem; border-radius: 4px; border: none; background: #1a73e8; color: white; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: default; }
+  </style>
+</head>
+<body>
+  <h2>Handwritten Image to Text</h2>
+  <p>Select a clear photo of handwritten text. The recognized text will appear below.</p>
+
+  <div class="box">
+    <input type="file" id="fileInput" accept="image/*" />
+    <br />
+    <img id="preview" alt="Image preview" />
+    <div id="progress"></div>
+    <br />
+    <button id="startBtn" disabled>Recognize Text</button>
+  </div>
+
+  <div class="box">
+    <h3>Recognized Text</h3>
+    <textarea id="output" placeholder="Text will appear here..." readonly></textarea>
+  </div>
+
+  <script>
+    const fileInput = document.getElementById('fileInput');
+    const preview = document.getElementById('preview');
+    const startBtn = document.getElementById('startBtn');
+    const progressEl = document.getElementById('progress');
+    const output = document.getElementById('output');
+
+    let imageFile = null;
+
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+      imageFile = file;
+
+      // Show preview
+      const reader = new FileReader();
+      reader.onload = e => {
+        preview.src = e.target.result;
+        preview.style.display = 'block';
+      };
+      reader.readAsDataURL(file);
+
+      startBtn.disabled = false;
+      progressEl.textContent = '';
+      output.value = '';
+    });
+
+    startBtn.addEventListener('click', async () => {
+      if (!imageFile) return;
+
+      startBtn.disabled = true;
+      progressEl.textContent = 'Starting recognition...';
+      output.value = '';
+
+      try {
+        const { data: { text } } = await Tesseract.recognize(
+          imageFile,
+          'eng',
+          {
+            logger: m => {
+              if (m.status === 'recognizing text' && m.progress) {
+                progressEl.textContent = `Recognizing: ${(m.progress * 100).toFixed(0)}%`;
+              } else {
+                progressEl.textContent = m.status;
+              }
+            }
+          }
+        );
+        output.value = text.trim();
+        progressEl.textContent = 'Done.';
+      } catch (err) {
+        console.error(err);
+        progressEl.textContent = 'Error during recognition.';
+        output.value = 'An error occurred. Please try another image.';
+      } finally {
+        startBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
