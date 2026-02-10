@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Optional
+from typing import Optional, List
 
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -42,6 +42,54 @@ app.add_middleware(
 vision_client: Optional[vision.ImageAnnotatorClient] = None
 
 
+def _merge_lines(lines: List[str]) -> str:
+    """
+    Heuristically merge short broken lines into more natural sentences
+    without trying to "correct" medical wording.
+    """
+    if not lines:
+        return ""
+
+    merged: List[str] = []
+    current = lines[0]
+
+    for line in lines[1:]:
+        if not line:
+            continue
+
+        is_short = len(line.split()) <= 3
+        starts_lower = line[0].islower()
+        current_ends_sentence = current.endswith((".", "!", "?"))
+
+        # If the new line is short or clearly a continuation, join it.
+        if is_short or (starts_lower and not current_ends_sentence):
+            if not current.endswith((" ", "\n")):
+                current += " "
+            current += line
+        else:
+            merged.append(current)
+            current = line
+
+    merged.append(current)
+    return " ".join(merged)
+
+
+def clean_full_text(raw_text: str) -> str:
+    """
+    Basic cleanup:
+    - strip whitespace
+    - drop empty lines
+    - merge short continuation lines
+    """
+    raw_text = (raw_text or "").strip()
+    if not raw_text:
+        return ""
+
+    lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+    merged = _merge_lines(lines)
+    return merged.strip()
+
+
 @app.on_event("startup")
 def startup_event() -> None:
     global vision_client
@@ -64,18 +112,19 @@ async def ocr_image(file: UploadFile = File(...)) -> dict:
             raise HTTPException(status_code=400, detail="Empty file")
 
         image = vision.Image(content=content)
+        image_context = vision.ImageContext(language_hints=["en"])
 
         # document_text_detection generally works better for handwriting
-        response = vision_client.document_text_detection(image=image)
+        response = vision_client.document_text_detection(image=image, image_context=image_context)
 
         if response.error.message:
             raise HTTPException(status_code=500, detail=response.error.message)
 
         text = ""
         if response.full_text_annotation and response.full_text_annotation.text:
-            text = response.full_text_annotation.text
+            text = clean_full_text(response.full_text_annotation.text)
 
-        return {"text": text.strip()}
+        return {"text": text}
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
