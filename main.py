@@ -91,19 +91,19 @@ def clean_full_text(raw_text: str) -> str:
     return merged.strip()
 
 
-def enhance_with_llm(text: str) -> str:
+def enhance_with_llm(text: str) -> tuple[str, bool]:
     """
     Use an LLM to lightly clean up wording and ordering without
     changing the medical meaning.
     """
     text = (text or "").strip()
     if not text:
-        return ""
+        return "", False
 
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         # If no key is configured, just return the cleaned Vision text.
-        return text
+        return text, False
 
     openai.api_key = api_key
 
@@ -126,10 +126,10 @@ def enhance_with_llm(text: str) -> str:
             max_tokens=100,
         )
         corrected = response.choices[0].message["content"].strip()
-        return corrected or text
+        return (corrected or text), True
     except Exception:
         # If the LLM call fails for any reason, fall back gracefully.
-        return text
+        return text, False
 
 
 @app.on_event("startup")
@@ -163,11 +163,12 @@ async def ocr_image(file: UploadFile = File(...)) -> dict:
             raise HTTPException(status_code=500, detail=response.error.message)
 
         text = ""
+        used_llm = False
         if response.full_text_annotation and response.full_text_annotation.text:
             text = clean_full_text(response.full_text_annotation.text)
-            text = enhance_with_llm(text)
+            text, used_llm = enhance_with_llm(text)
 
-        return {"text": text}
+        return {"text": text, "used_llm": used_llm}
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
