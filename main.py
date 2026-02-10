@@ -6,6 +6,7 @@ from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from google.cloud import vision
 from google.oauth2 import service_account
+import openai
 
 
 def create_vision_client() -> vision.ImageAnnotatorClient:
@@ -90,6 +91,47 @@ def clean_full_text(raw_text: str) -> str:
     return merged.strip()
 
 
+def enhance_with_llm(text: str) -> str:
+    """
+    Use an LLM to lightly clean up wording and ordering without
+    changing the medical meaning.
+    """
+    text = (text or "").strip()
+    if not text:
+        return ""
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        # If no key is configured, just return the cleaned Vision text.
+        return text
+
+    openai.api_key = api_key
+
+    prompt = (
+        "You receive short clinical notes that have already been OCR'd from handwriting. "
+        "Fix obvious spelling mistakes and word order, but do not add or remove medical "
+        "information. Keep the result concise. Here is the text:\n\n"
+        f"{text}\n\n"
+        "Return only the corrected note, nothing else."
+    )
+
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a careful assistant editing brief clinical notes."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
+            max_tokens=100,
+        )
+        corrected = response.choices[0].message["content"].strip()
+        return corrected or text
+    except Exception:
+        # If the LLM call fails for any reason, fall back gracefully.
+        return text
+
+
 @app.on_event("startup")
 def startup_event() -> None:
     global vision_client
@@ -123,6 +165,7 @@ async def ocr_image(file: UploadFile = File(...)) -> dict:
         text = ""
         if response.full_text_annotation and response.full_text_annotation.text:
             text = clean_full_text(response.full_text_annotation.text)
+            text = enhance_with_llm(text)
 
         return {"text": text}
     except HTTPException:
