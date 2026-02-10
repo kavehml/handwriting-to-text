@@ -6,7 +6,7 @@ from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from google.cloud import vision
 from google.oauth2 import service_account
-import openai
+from openai import OpenAI
 
 
 def create_vision_client() -> vision.ImageAnnotatorClient:
@@ -41,6 +41,7 @@ app.add_middleware(
 )
 
 vision_client: Optional[vision.ImageAnnotatorClient] = None
+llm_client: Optional[OpenAI] = None
 
 
 def _merge_lines(lines: List[str]) -> str:
@@ -100,12 +101,9 @@ def enhance_with_llm(text: str) -> tuple[str, bool]:
     if not text:
         return "", False
 
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        # If no key is configured, just return the cleaned Vision text.
+    if llm_client is None:
+        # If no client is configured, just return the cleaned Vision text.
         return text, False
-
-    openai.api_key = api_key
 
     prompt = (
         "You receive short clinical notes that have already been OCR'd from handwriting. "
@@ -116,7 +114,7 @@ def enhance_with_llm(text: str) -> tuple[str, bool]:
     )
 
     try:
-        response = openai.ChatCompletion.create(
+        response = llm_client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "You are a careful assistant editing brief clinical notes."},
@@ -125,7 +123,7 @@ def enhance_with_llm(text: str) -> tuple[str, bool]:
             temperature=0.2,
             max_tokens=100,
         )
-        corrected = response.choices[0].message["content"].strip()
+        corrected = response.choices[0].message.content.strip()
         return (corrected or text), True
     except Exception:
         # If the LLM call fails for any reason, fall back gracefully.
@@ -134,8 +132,11 @@ def enhance_with_llm(text: str) -> tuple[str, bool]:
 
 @app.on_event("startup")
 def startup_event() -> None:
-    global vision_client
+    global vision_client, llm_client
     vision_client = create_vision_client()
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if api_key:
+        llm_client = OpenAI(api_key=api_key)
 
 
 @app.get("/healthz")
